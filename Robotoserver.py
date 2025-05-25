@@ -1,16 +1,15 @@
 import asyncio
-import websockets
 import json
 import sqlite3
 import os
 from typing import Dict, Optional
-from aiohttp import web  # 新增
+from aiohttp import web
+import websockets
 
-HOST = '0.0.0.0'
-PORT = int(os.environ.get("PORT", 12345))  # 支援 Render 的 PORT 環境變數
 DB_FILE = 'users.db'
+clients: Dict[str, websockets.WebSocketServerProtocol] = {}
 
-# 初始化 SQLite 資料庫
+# 初始化 SQLite
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -59,9 +58,8 @@ def list_users() -> list:
     conn.close()
     return users
 
-clients: Dict[str, websockets.WebSocketServerProtocol] = {}
-
-async def handle_client(websocket: websockets.WebSocketServerProtocol, path: str):
+# WebSocket 處理
+async def handle_client(websocket, path):
     nickname: Optional[str] = None
     try:
         async for message in websocket:
@@ -115,7 +113,6 @@ async def handle_client(websocket: websockets.WebSocketServerProtocol, path: str
 
             elif action == 'list':
                 await websocket.send(json.dumps({'type': 'list', 'users': list_users()}))
-
             else:
                 await websocket.send(json.dumps({'status': 'error', 'msg': '未知動作'}))
 
@@ -125,26 +122,31 @@ async def handle_client(websocket: websockets.WebSocketServerProtocol, path: str
         if nickname and nickname in clients:
             del clients[nickname]
 
-# 新增 HTTP 健康檢查處理器
+# 健康檢查 (給 Render 用)
 async def handle_health_check(request):
     return web.Response(text="OK")
 
+# 主函式
 async def main():
     init_db()
 
-    # 啟動 WebSocket server
-    ws_server = await websockets.serve(handle_client, HOST, PORT)
-
-    # 啟動 aiohttp HTTP server
+    # 啟動 aiohttp HTTP 伺服器（健康檢查用）
     app = web.Application()
-    app.router.add_get("/", handle_health_check)
+    app.router.add_get('/', handle_health_check)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, HOST, PORT)
-    await site.start()
 
-    print(f"WebSocket & HTTP 伺服器已啟動在 port {PORT}")
-    await asyncio.Future()
+    PORT = int(os.environ.get('PORT', 12345))  # Render 會提供 PORT 變數
+    site = web.TCPSite(runner, host='0.0.0.0', port=PORT)
+    await site.start()
+    print(f"[HTTP] 健康檢查伺服器啟動於 http://0.0.0.0:{PORT}")
+
+    # 啟動 WebSocket 伺服器（固定在不同 port，Render 無需掃描）
+    ws_port = 8765
+    ws_server = await websockets.serve(handle_client, '0.0.0.0', ws_port)
+    print(f"[WebSocket] 聊天伺服器啟動於 ws://0.0.0.0:{ws_port}")
+
+    await asyncio.Future()  # 永遠不結束
 
 if __name__ == '__main__':
     asyncio.run(main())
