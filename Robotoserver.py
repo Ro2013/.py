@@ -4,9 +4,10 @@ import json
 import sqlite3
 import os
 from typing import Dict, Optional
+from aiohttp import web  # 新增
 
 HOST = '0.0.0.0'
-PORT = 12345
+PORT = int(os.environ.get("PORT", 12345))  # 支援 Render 的 PORT 環境變數
 DB_FILE = 'users.db'
 
 # 初始化 SQLite 資料庫
@@ -124,11 +125,26 @@ async def handle_client(websocket: websockets.WebSocketServerProtocol, path: str
         if nickname and nickname in clients:
             del clients[nickname]
 
+# 新增 HTTP 健康檢查處理器
+async def handle_health_check(request):
+    return web.Response(text="OK")
+
 async def main():
     init_db()
-    async with websockets.serve(handle_client, HOST, PORT):
-        print(f"WebSocket 伺服器已啟動在 ws://{HOST}:{PORT}")
-        await asyncio.Future()
+
+    # 啟動 WebSocket server
+    ws_server = await websockets.serve(handle_client, HOST, PORT)
+
+    # 啟動 aiohttp HTTP server
+    app = web.Application()
+    app.router.add_get("/", handle_health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, HOST, PORT)
+    await site.start()
+
+    print(f"WebSocket & HTTP 伺服器已啟動在 port {PORT}")
+    await asyncio.Future()
 
 if __name__ == '__main__':
     asyncio.run(main())
