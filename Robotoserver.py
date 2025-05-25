@@ -2,14 +2,11 @@ import asyncio
 import json
 import sqlite3
 import os
-from typing import Dict, Optional
-from aiohttp import web
-import websockets
+from aiohttp import web, WSMsgType
 
 DB_FILE = 'users.db'
-clients: Dict[str, websockets.WebSocketServerProtocol] = {}
+clients = {}
 
-# 初始化 SQLite
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
@@ -22,7 +19,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-def register_user(nickname: str, password: str) -> str:
+def register_user(nickname, password):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     try:
@@ -34,23 +31,23 @@ def register_user(nickname: str, password: str) -> str:
     finally:
         conn.close()
 
-def check_password_used(password: str) -> bool:
+def check_password_used(password):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT 1 FROM users WHERE password = ?", (password,))
-    exists = c.fetchone() is not None
+    result = c.fetchone()
     conn.close()
-    return exists
+    return result is not None
 
-def verify_login(nickname: str, password: str) -> bool:
+def verify_login(nickname, password):
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT password FROM users WHERE nickname = ?", (nickname,))
     row = c.fetchone()
     conn.close()
-    return row is not None and row[0] == password
+    return row and row[0] == password
 
-def list_users() -> list:
+def list_users():
     conn = sqlite3.connect(DB_FILE)
     c = conn.cursor()
     c.execute("SELECT nickname FROM users")
@@ -58,95 +55,88 @@ def list_users() -> list:
     conn.close()
     return users
 
-# WebSocket 處理
-async def handle_client(websocket, path):
-    nickname: Optional[str] = None
-    try:
-        async for message in websocket:
+async def websocket_handler(request):
+    ws = web.WebSocketResponse()
+    await ws.prepare(request)
+
+    nickname = None
+    clients_ws = request.app['clients']
+
+    async for msg in ws:
+        if msg.type == WSMsgType.TEXT:
             try:
-                request = json.loads(message)
+                data = json.loads(msg.data)
             except json.JSONDecodeError:
-                await websocket.send(json.dumps({'status': 'error', 'msg': '訊息格式錯誤'}))
+                await ws.send_json({'status': 'error', 'msg': '格式錯誤'})
                 continue
 
-            action = request.get('action')
+            action = data.get('action')
 
             if action == 'register':
-                nick = request.get('nickname')
-                pw = request.get('password')
-                if not nick or not pw:
-                    await websocket.send(json.dumps({'status': 'error', 'msg': '暱稱和密碼不可為空'}))
-                elif check_password_used(pw):
-                    await websocket.send(json.dumps({'status': 'error', 'msg': '密碼已被使用'}))
+                nickname = data.get('nickname')
+                password = data.get('password')
+                if not nickname or not password:
+                    await ws.send_json({'status': 'error', 'msg': '暱稱和密碼不能空白'})
+                elif check_password_used(password):
+                    await ws.send_json({'status': 'error', 'msg': '密碼已被使用'})
                 else:
-                    result = register_user(nick, pw)
-                    if result == "exists":
-                        await websocket.send(json.dumps({'status': 'error', 'msg': '暱稱已存在'}))
+                    result = register_user(nickname, password)
+                    if result == 'exists':
+                        await ws.send_json({'status': 'error', 'msg': '暱稱已存在'})
                     else:
-                        await websocket.send(json.dumps({'status': 'ok'}))
+                        await ws.send_json({'status': 'ok'})
 
             elif action == 'login':
-                nick = request.get('nickname')
-                pw = request.get('password')
-                if verify_login(nick, pw):
-                    nickname = nick
-                    clients[nick] = websocket
-                    await websocket.send(json.dumps({'status': 'ok'}))
-                    print(f'{nick} 登入成功')
+                nickname = data.get('nickname')
+                password = data.get('password')
+                if verify_login(nickname, password):
+                    clients_ws[nickname] = ws
+                    await ws.send_json({'status': 'ok'})
                 else:
-                    await websocket.send(json.dumps({'status': 'error', 'msg': '登入失敗'}))
+                    await ws.send_json({'status': 'error', 'msg': '登入失敗'})
 
             elif action == 'message':
-                if not nickname:
-                    await websocket.send(json.dumps({'status': 'error', 'msg': '尚未登入'}))
-                    continue
-                target = request.get('to')
-                msg = request.get('msg')
-                if target in clients:
-                    await clients[target].send(json.dumps({
+                target = data.get('to')
+                msg_text = data.get('msg')
+                if target in clients_ws:
+                    await clients_ws[target].send_json({
                         'type': 'message',
                         'from': nickname,
-                        'msg': msg
-                    }))
+                        'msg': msg_text
+                    })
                 else:
-                    await websocket.send(json.dumps({'status': 'error', 'msg': '目標不在線上'}))
+                    await ws.send_json({'status': 'error', 'msg': '對方不在線上'})
 
             elif action == 'list':
-                await websocket.send(json.dumps({'type': 'list', 'users': list_users()}))
-            else:
-                await websocket.send(json.dumps({'status': 'error', 'msg': '未知動作'}))
+                await ws.send_json({'type': 'list', 'users': list_users()})
 
-    except websockets.exceptions.ConnectionClosed:
-        print(f'{nickname or "一位用戶"} 離線')
-    finally:
-        if nickname and nickname in clients:
-            del clients[nickname]
+        elif msg.type == WSMsgType.ERROR:
+            print(f'WebSocket error: {ws.exception()}')
 
-# 健康檢查 (給 Render 用)
-async def handle_health_check(request):
-    return web.Response(text="OK")
+    if nickname and nickname in clients_ws:
+        del clients_ws[nickname]
 
-# 主函式
+    return ws
+
+async def handle_health(request):
+    return web.Response(text='OK')
+
 async def main():
     init_db()
-
-    # 啟動 aiohttp HTTP 伺服器（健康檢查用）
     app = web.Application()
-    app.router.add_get('/', handle_health_check)
+    app['clients'] = {}
+
+    app.router.add_get('/', handle_health)
+    app.router.add_get('/ws', websocket_handler)
+
+    PORT = int(os.environ.get("PORT", 10000))
     runner = web.AppRunner(app)
     await runner.setup()
-
-    PORT = int(os.environ.get('PORT', 12345))  # Render 會提供 PORT 變數
-    site = web.TCPSite(runner, host='0.0.0.0', port=PORT)
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start()
-    print(f"[HTTP] 健康檢查伺服器啟動於 http://0.0.0.0:{PORT}")
 
-    # 啟動 WebSocket 伺服器（固定在不同 port，Render 無需掃描）
-    ws_port = 8765
-    ws_server = await websockets.serve(handle_client, '0.0.0.0', ws_port)
-    print(f"[WebSocket] 聊天伺服器啟動於 ws://0.0.0.0:{ws_port}")
-
-    await asyncio.Future()  # 永遠不結束
+    print(f"伺服器已啟動於 PORT {PORT}")
+    await asyncio.Event().wait()
 
 if __name__ == '__main__':
     asyncio.run(main())
