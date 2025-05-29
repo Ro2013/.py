@@ -1,59 +1,39 @@
 import asyncio
 import json
-import sqlite3
 import os
 from aiohttp import web, WSMsgType
+from supabase import create_client, Client
 
-DB_FILE = 'users.db'
+# 🔧 Supabase 連線設定（請改成你自己的）
+SUPABASE_URL = "https://gvnejjquvlmhtpsxyfpz.supabase.co"
+SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd2bmVqanF1dmxtaHRwc3h5ZnB6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg1MTc0MTIsImV4cCI6MjA2NDA5MzQxMn0.0PKjsXqgQ4HY9XWoxMuqWuJ3VZkaH8Fs1JDnWcus6mE"
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 clients = {}
 
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            nickname TEXT PRIMARY KEY,
-            password TEXT NOT NULL
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
 def register_user(nickname, password):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
     try:
-        c.execute("INSERT INTO users (nickname, password) VALUES (?, ?)", (nickname, password))
-        conn.commit()
-        return "ok"
-    except sqlite3.IntegrityError:
+        result = supabase.table("users").insert({"nickname": nickname, "password": password}).execute()
+        if result.status_code == 201:
+            return "ok"
+        else:
+            return "error"
+    except Exception:
         return "exists"
-    finally:
-        conn.close()
 
 def check_password_used(password):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT 1 FROM users WHERE password = ?", (password,))
-    result = c.fetchone()
-    conn.close()
-    return result is not None
+    result = supabase.table("users").select("nickname").eq("password", password).execute()
+    return len(result.data) > 0
 
 def verify_login(nickname, password):
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT password FROM users WHERE nickname = ?", (nickname,))
-    row = c.fetchone()
-    conn.close()
-    return row and row[0] == password
+    result = supabase.table("users").select("password").eq("nickname", nickname).execute()
+    if result.data and result.data[0]["password"] == password:
+        return True
+    return False
 
 def list_users():
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute("SELECT nickname FROM users")
-    users = [row[0] for row in c.fetchall()]
-    conn.close()
-    return users
+    result = supabase.table("users").select("nickname").execute()
+    return [row["nickname"] for row in result.data]
 
 async def websocket_handler(request):
     ws = web.WebSocketResponse()
@@ -83,8 +63,10 @@ async def websocket_handler(request):
                     result = register_user(nickname, password)
                     if result == 'exists':
                         await ws.send_json({'status': 'error', 'msg': '暱稱已存在'})
-                    else:
+                    elif result == 'ok':
                         await ws.send_json({'status': 'ok'})
+                    else:
+                        await ws.send_json({'status': 'error', 'msg': '註冊失敗'})
 
             elif action == 'login':
                 nickname = data.get('nickname')
@@ -122,7 +104,6 @@ async def handle_health(request):
     return web.Response(text='OK')
 
 async def main():
-    init_db()
     app = web.Application()
     app['clients'] = {}
 
