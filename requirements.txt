@@ -1,2 +1,2 @@
 aiohttp
-supabase-py==1.0.3
+git+https://github.com/supabase-community/supabase-py.git
