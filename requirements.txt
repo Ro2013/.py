@@ -1,2 +1,2 @@
 aiohttp
-supabase-py
+supabase-py==1.0.3
