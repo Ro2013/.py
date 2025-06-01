@@ -5,8 +5,8 @@ from aiohttp import web, WSMsgType
 from supabase import create_client, Client
 
 # 🔧 Supabase 連線設定（請改成你自己的）
-SUPABASE_URL = "https://gvnejjquvlmhtpsxyfpz.supabase.co"
-SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd2bmVqanF1dmxtaHRwc3h5ZnB6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg1MTc0MTIsImV4cCI6MjA2NDA5MzQxMn0.0PKjsXqgQ4HY9XWoxMuqWuJ3VZkaH8Fs1JDnWcus6mE"
+SUPABASE_URL = "https://jdnwcyoesbwuzxyxtlut.supabase.co"
+SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpkbndjeW9lc2J3dXp4eXh0bHV0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDg3NDA0MjgsImV4cCI6MjA2NDMxNjQyOH0.5iMd0VYCyehE3EXUz0O8RsHFKPNxta2iQy_92p-gIhQ"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 clients = {}
